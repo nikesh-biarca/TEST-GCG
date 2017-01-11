@@ -189,28 +189,44 @@ class KaminarioCinderDriver(cinder.volume.driver.ISCSIDriver):
         self._check_ops()
 
     @kaminario_logger
+    def create_group(self, context, group):
+        self.client.new("volume_groups", name="cvg-%s" % group.id, quota=0,
+                        is_dedup=True).save() 
+
+    @kaminario_logger
     def create_volume(self, volume):
         """Volume creation in K2 needs a volume group.
 
         - create a volume group
         - create a volume in the volume group
         """
-        vg_name = self.get_volume_group_name(volume.id)
         vol_name = self.get_volume_name(volume.id)
         prov_type = self._get_is_dedup(volume.get('volume_type'))
         try:
-            LOG.debug("Creating volume group with name: %(name)s, "
-                      "quota: unlimited and dedup_support: %(dedup)s",
-                      {'name': vg_name, 'dedup': prov_type})
-
-            vg = self.client.new("volume_groups", name=vg_name, quota=0,
-                                 is_dedup=prov_type).save()
-            LOG.debug("Creating volume with name: %(name)s, size: %(size)s "
-                      "GB, volume_group: %(vg)s",
-                      {'name': vol_name, 'size': volume.size, 'vg': vg_name})
-            vol = self.client.new("volumes", name=vol_name,
-                                  size=volume.size * units.Mi,
-                                  volume_group=vg).save()
+           if volume.group_id:
+               vg_name = "cg-%s" % volume.group_id
+               vg_rs = self.client.search("volume_groups", name=vg_name)
+               if vg_rs.total == 0:
+                   vg = self.client.new("volume_groups", name=vg_name, quota=0,
+                        is_dedup=prov_type).save()
+                   LOG.debug("Creating volume group with name: %(name)s, "
+                             "quota: unlimited and dedup_support: %(dedup)s",
+                             {'name': vg_name, 'dedup': prov_type})
+               else:
+                   vg = vg_rs.hits[0]
+           else:
+                vg_name = self.get_volume_group_name(volume.id)
+                vg = self.client.new("volume_groups", name=vg_name, quota=0,
+                                     is_dedup=prov_type).save()
+                LOG.debug("Creating volume group with name: %(name)s, "
+                             "quota: unlimited and dedup_support: %(dedup)s",
+                             {'name': vg_name, 'dedup': prov_type})
+           LOG.debug("Creating volume with name: %(name)s, size: %(size)s "
+                     "GB, volume_group: %(vg)s",
+                     {'name': vol_name, 'size': volume.size, 'vg': vg_name})
+           vol = self.client.new("volumes", name=vol_name,
+                                 size=volume.size * units.Mi,
+                                 volume_group=vg).save()
         except Exception as ex:
             vg_rs = self.client.search("volume_groups", name=vg_name)
             if vg_rs.total != 0:
@@ -832,7 +848,8 @@ class KaminarioCinderDriver(cinder.volume.driver.ISCSIDriver):
                       'max_oversubscription_ratio': ratio,
                       'kaminario:thin_prov_type': 'dedup/nodedup',
                       'replication_enabled': True,
-                      'kaminario:replication': True}
+                      'kaminario:replication': True,
+                      'consistent_group_snapshot_enabled': True}
 
     def get_initiator_host_name(self, connector):
         """Return the initiator host name.
